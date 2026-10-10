@@ -84,6 +84,9 @@ module axi_to_obi #(
   axi_req_t axi_read_req, axi_write_req, axi_write_req_cvt;
   axi_rsp_t axi_read_rsp, axi_write_rsp, axi_read_rsp_dmx, axi_write_rsp_dmx;
 
+  logic                              axi_write_r_valid_spill, axi_write_r_ready_spill;
+  logic [$bits(axi_write_rsp.r)-1:0] axi_write_r_spill;
+
   // AR only reaches the read converter and AW/W only the write one: tie off the rest
   always_comb begin : proc_tie_unused_channels
     axi_read_rsp_dmx          = axi_read_rsp;
@@ -92,12 +95,33 @@ module axi_to_obi #(
     axi_read_rsp_dmx.b_valid  = 1'b0;
     axi_write_rsp_dmx          = axi_write_rsp;
     axi_write_rsp_dmx.ar_ready = 1'b0;
+    axi_write_rsp_dmx.r_valid  = axi_write_r_valid_spill;
+    axi_write_rsp_dmx.r        = axi_write_r_spill;
     axi_write_req_cvt          = axi_write_req;
+    axi_write_req_cvt.r_ready  = axi_write_r_ready_spill;
+  end
+
+  // R are coming back from the write converter when supporting ATOPs.
+  if (ObiCfg.OptionalCfg.UseAtop) begin : gen_atop_r_cut
+    cc_spill_register #(
+      .data_t ( logic [$bits(axi_write_rsp.r)-1:0] ),
+      .Bypass ( 1'b0                               )
+    ) i_atop_r_cut (
+      .clk_i,
+      .rst_ni,
+      .clr_i   ( 1'b0                    ),
+      .valid_i ( axi_write_rsp.r_valid   ),
+      .ready_o ( axi_write_r_ready_spill ),
+      .data_i  ( axi_write_rsp.r         ),
+      .valid_o ( axi_write_r_valid_spill ),
+      .ready_i ( axi_write_req.r_ready   ),
+      .data_o  ( axi_write_r_spill       )
+    );
+  end else begin : gen_tie_write_r
     // without ATOPs the write converter never returns R beats
-    if (!ObiCfg.OptionalCfg.UseAtop) begin
-      axi_write_rsp_dmx.r_valid = 1'b0;
-      axi_write_req_cvt.r_ready = 1'b1;
-    end
+    assign axi_write_r_valid_spill = 1'b0;
+    assign axi_write_r_ready_spill = 1'b1;
+    assign axi_write_r_spill       = '0;
   end
 
   localparam int unsigned IdRuserWidth = ObiCfg.IdWidth+ObiCfg.OptionalCfg.RUserWidth;
